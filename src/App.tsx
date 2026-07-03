@@ -1,6 +1,5 @@
 import { startTransition, useEffect, useId, useRef, useState } from "react";
 import {
-  buildColumnText,
   formatRange,
   getWordDiffTokens,
   type DiffRow,
@@ -18,6 +17,7 @@ const LARGE_FILE_ROW_THRESHOLD = 1_200;
 const LARGE_HUNK_ROW_THRESHOLD = 260;
 const LAZY_HUNK_THRESHOLD = 90;
 const HUNK_BATCH_SIZE = 200;
+const FILE_PREVIEW_ROW_LIMIT = 1000;
 
 type ParseState = {
   data: ParsedContextDiff | null;
@@ -34,16 +34,10 @@ export default function App() {
   const [viewMode, setViewMode] = useState<ViewMode>("word");
   const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
   const [showSource, setShowSource] = useState(false);
-  const [copyMessage, setCopyMessage] = useState<string | null>(null);
+  const [expandedFiles, setExpandedFiles] = useState<Record<string, boolean>>({});
   const fileInputId = useId();
   const parseState = useContextDiffParser(source);
   const parsedData = parseState.data;
-
-  useEffect(() => {
-    if (!copyMessage) return;
-    const timeout = window.setTimeout(() => setCopyMessage(null), 1800);
-    return () => window.clearTimeout(timeout);
-  }, [copyMessage]);
 
   useEffect(() => {
     const available = parsedData?.files ?? [];
@@ -61,24 +55,9 @@ export default function App() {
       ? parsedData.files.find((file) => file.id === selectedFileId) ?? parsedData.files[0]
       : parsedData?.files[0] ?? null;
   const performanceMode = shouldUseLargePatchMode(source, parsedData, selectedFile);
-
-  async function handleCopyColumn(side: "old" | "new") {
-    if (!selectedFile) {
-      setCopyMessage("No file selected");
-      return;
-    }
-    const text = buildColumnText(selectedFile, side);
-    if (!text) {
-      setCopyMessage(`No ${side} column content to copy`);
-      return;
-    }
-    try {
-      await copyText(text);
-      setCopyMessage(`Copied ${side} column`);
-    } catch {
-      setCopyMessage("Clipboard copy failed");
-    }
-  }
+  const filePreview = selectedFile
+    ? buildFilePreview(selectedFile, expandedFiles[selectedFile.id] === true)
+    : null;
 
   return (
     <div className="app-container">
@@ -169,7 +148,12 @@ export default function App() {
           {selectedFile ? (
             <>
               <div className="viewer-header">
-                <div className="viewer-title">{selectedFile.displayName}</div>
+                <div>
+                  <div className="viewer-title">{selectedFile.displayName}</div>
+                  <div className="viewer-subtitle">
+                    Select text directly inside one column to copy it. Line numbers and markers are excluded.
+                  </div>
+                </div>
                 <div className="viewer-toolbar">
                   <div className="toolbar-group">
                     <div className="segmented-control">
@@ -187,27 +171,75 @@ export default function App() {
                       </button>
                     </div>
                   </div>
-                  <div className="toolbar-group">
-                    <button className="btn btn-secondary btn-sm" onClick={() => handleCopyColumn('old')}>
-                      Copy Old
-                    </button>
-                    <button className="btn btn-secondary btn-sm" onClick={() => handleCopyColumn('new')}>
-                      Copy New
-                    </button>
-                  </div>
                 </div>
               </div>
 
+              {filePreview?.isCollapsed ? (
+                <div className="file-preview-banner">
+                  <div>
+                    Previewing the first {filePreview.visibleRows} rows of {selectedFile.summary.rows}.
+                    The remaining {filePreview.hiddenRows} rows are collapsed by default.
+                  </div>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={() =>
+                      setExpandedFiles((current) => ({
+                        ...current,
+                        [selectedFile.id]: true,
+                      }))
+                    }
+                  >
+                    Show Remaining Rows
+                  </button>
+                </div>
+              ) : selectedFile.summary.rows > FILE_PREVIEW_ROW_LIMIT ? (
+                <div className="file-preview-banner file-preview-banner--expanded">
+                  <div>Showing all {selectedFile.summary.rows} rows for this file.</div>
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={() =>
+                      setExpandedFiles((current) => ({
+                        ...current,
+                        [selectedFile.id]: false,
+                      }))
+                    }
+                  >
+                    Collapse to First {FILE_PREVIEW_ROW_LIMIT}
+                  </button>
+                </div>
+              ) : null}
+
               <div className="diff-content">
-                {selectedFile.hunks.map((hunk, index) => (
+                {filePreview?.hunks.map(({ hunk, rows, isPartial }, index) => (
                   <LazyHunkCard
                     key={hunk.id}
                     hunk={hunk}
                     index={index}
+                    rows={rows}
                     viewMode={viewMode}
                     performanceMode={performanceMode}
+                    isPartialPreview={isPartial}
                   />
                 ))}
+                {filePreview?.isCollapsed ? (
+                  <div className="collapsed-tail-panel">
+                    <div className="collapsed-tail-panel__title">Remaining rows are folded away</div>
+                    <div className="collapsed-tail-panel__body">
+                      This file is long, so the viewer starts with a 1000-row preview. Expand to load the rest only when you need it.
+                    </div>
+                    <button
+                      className="btn btn-primary"
+                      onClick={() =>
+                        setExpandedFiles((current) => ({
+                          ...current,
+                          [selectedFile.id]: true,
+                        }))
+                      }
+                    >
+                      Open Full File
+                    </button>
+                  </div>
+                ) : null}
               </div>
             </>
           ) : (
@@ -225,7 +257,6 @@ export default function App() {
           )}
         </main>
       </div>
-      {copyMessage && <div className="toast">{copyMessage}</div>}
     </div>
   );
 }
@@ -233,53 +264,85 @@ export default function App() {
 function LazyHunkCard({
   hunk,
   index,
+  rows,
   viewMode,
   performanceMode,
+  isPartialPreview,
 }: {
   hunk: HunkDiff;
   index: number;
+  rows: DiffRow[];
   viewMode: ViewMode;
   performanceMode: boolean;
+  isPartialPreview: boolean;
 }) {
-  const useLazyMount = performanceMode && hunk.rows.length >= LAZY_HUNK_THRESHOLD;
-  const isLargeHunk = performanceMode && hunk.rows.length >= LARGE_HUNK_ROW_THRESHOLD;
+  const totalRows = rows.length;
+  const useLazyMount = performanceMode && totalRows >= LAZY_HUNK_THRESHOLD;
+  const isLargeHunk = performanceMode && totalRows >= LARGE_HUNK_ROW_THRESHOLD;
   const { sectionRef, isActivated } = useHunkActivation(!useLazyMount);
   const [visibleRows, setVisibleRows] = useState(
-    isLargeHunk ? Math.min(HUNK_BATCH_SIZE, hunk.rows.length) : hunk.rows.length,
+    isLargeHunk ? Math.min(HUNK_BATCH_SIZE, totalRows) : totalRows,
   );
 
   useEffect(() => {
-    setVisibleRows(isLargeHunk ? Math.min(HUNK_BATCH_SIZE, hunk.rows.length) : hunk.rows.length);
-  }, [hunk.id, hunk.rows.length, isLargeHunk]);
+    setVisibleRows(isLargeHunk ? Math.min(HUNK_BATCH_SIZE, totalRows) : totalRows);
+  }, [hunk.id, totalRows, isLargeHunk]);
 
-  const renderedRows = isLargeHunk ? hunk.rows.slice(0, visibleRows) : hunk.rows;
-  const placeholderHeight = `${Math.min(420, 84 + hunk.rows.length * 8)}px`;
+  const renderedRows = isLargeHunk ? rows.slice(0, visibleRows) : rows;
+  const placeholderHeight = `${Math.min(420, 84 + totalRows * 8)}px`;
 
   return (
     <div ref={sectionRef as any} className="hunk-container" id={hunk.id}>
       <div className="hunk-header">
         <span>Hunk {index + 1}</span>
-        <span>{formatRange(hunk.oldRange)} → {formatRange(hunk.newRange)}</span>
+        <span>
+          {formatRange(hunk.oldRange)} → {formatRange(hunk.newRange)}
+          {isPartialPreview ? " · preview cut here" : ""}
+        </span>
       </div>
 
       {isActivated ? (
         <div className="diff-table">
-          {renderedRows.map((row, rowIndex) => (
-            <DiffRowView key={`${hunk.id}-${rowIndex}`} row={row} viewMode={viewMode} />
-          ))}
-          {isLargeHunk && visibleRows < hunk.rows.length && (
+          <div className="diff-grid">
+            <div className="diff-grid-header diff-grid-header--old">Old</div>
+            <div className="diff-grid-header diff-grid-header--new">New</div>
+            {renderedRows.map((row, rowIndex) => (
+              <DiffCell
+                key={`${hunk.id}-old-${rowIndex}`}
+                side="old"
+                row={row}
+                rowIndex={rowIndex + 2}
+                viewMode={viewMode}
+              />
+            ))}
+            {renderedRows.map((row, rowIndex) => (
+              <DiffCell
+                key={`${hunk.id}-new-${rowIndex}`}
+                side="new"
+                row={row}
+                rowIndex={rowIndex + 2}
+                viewMode={viewMode}
+              />
+            ))}
+          </div>
+          {isLargeHunk && visibleRows < totalRows && (
             <div className="hunk-footer">
-              <span>Showing {visibleRows} of {hunk.rows.length} rows</span>
+              <span>Showing {visibleRows} of {totalRows} rows</span>
               <div>
                 <button
                   className="btn btn-ghost btn-sm"
-                  onClick={() => setVisibleRows((c) => Math.min(c + HUNK_BATCH_SIZE, hunk.rows.length))}
+                  onClick={() => setVisibleRows((c) => Math.min(c + HUNK_BATCH_SIZE, totalRows))}
                 >
                   Load More
                 </button>
               </div>
             </div>
           )}
+          {isPartialPreview ? (
+            <div className="hunk-footer hunk-footer--preview-cut">
+              <span>This hunk continues below the current 1000-row preview.</span>
+            </div>
+          ) : null}
         </div>
       ) : (
         <div className="lazy-hunk-placeholder" style={{ minHeight: placeholderHeight }}>
@@ -290,66 +353,44 @@ function LazyHunkCard({
   );
 }
 
-function DiffRowView({ row, viewMode }: { row: DiffRow; viewMode: ViewMode }) {
-  const tokenDiff = viewMode === "word" && row.kind === "modify" ? getWordDiffTokens(row.oldText, row.newText) : null;
-  return (
-    <div className="diff-row">
-      <div className="diff-half">
-        <DiffLine
-          side="old"
-          lineNumber={row.oldLineNumber}
-          rowKind={row.kind}
-          tokens={tokenDiff?.oldTokens ?? null}
-          fallbackText={row.oldText}
-          viewMode={viewMode}
-        />
-      </div>
-      <div className="diff-half">
-        <DiffLine
-          side="new"
-          lineNumber={row.newLineNumber}
-          rowKind={row.kind}
-          tokens={tokenDiff?.newTokens ?? null}
-          fallbackText={row.newText}
-          viewMode={viewMode}
-        />
-      </div>
-    </div>
-  );
-}
-
-function DiffLine({
+function DiffCell({
   side,
-  lineNumber,
-  rowKind,
-  tokens,
-  fallbackText,
+  row,
+  rowIndex,
   viewMode,
 }: {
   side: "old" | "new";
-  lineNumber: number | null;
-  rowKind: DiffRow["kind"];
-  tokens: DiffToken[] | null;
-  fallbackText: string;
+  row: DiffRow;
+  rowIndex: number;
   viewMode: ViewMode;
 }) {
+  const lineNumber = side === "old" ? row.oldLineNumber : row.newLineNumber;
+  const fallbackText = side === "old" ? row.oldText : row.newText;
   const isBlank = lineNumber === null;
-  const marker = getMarker(side, rowKind, isBlank);
-  
+  const marker = getMarker(side, row.kind, isBlank);
+  const tokenDiff = viewMode === "word" && row.kind === "modify" ? getWordDiffTokens(row.oldText, row.newText) : null;
+  const tokens = side === "old" ? tokenDiff?.oldTokens ?? null : tokenDiff?.newTokens ?? null;
+
   let lineClass = "line-ctx";
   if (isBlank) lineClass = "line-empty";
-  else if (rowKind === "add") lineClass = side === "new" ? "line-add" : "line-ctx";
-  else if (rowKind === "delete") lineClass = side === "old" ? "line-del" : "line-ctx";
-  else if (rowKind === "modify") lineClass = side === "old" ? "line-mod-old" : "line-mod-new";
+  else if (row.kind === "add") lineClass = side === "new" ? "line-add" : "line-ctx";
+  else if (row.kind === "delete") lineClass = side === "old" ? "line-del" : "line-ctx";
+  else if (row.kind === "modify") lineClass = side === "old" ? "line-mod-old" : "line-mod-new";
 
   return (
-    <div className={`diff-line ${lineClass}`}>
-      <div className="line-num">{lineNumber ?? ""}</div>
-      <div className="line-marker">{marker}</div>
+    <div
+      className={`diff-line ${lineClass} diff-line--${side}`}
+      style={{
+        gridColumn: side === "old" ? "1" : "2",
+        gridRow: `${rowIndex}`,
+      }}
+    >
+      <div className="line-num" aria-hidden="true">{lineNumber ?? ""}</div>
+      <div className="line-marker" aria-hidden="true">{marker}</div>
       <div className="line-content">
         {isBlank ? (
           " "
-        ) : viewMode === "word" && rowKind === "modify" && tokens ? (
+        ) : viewMode === "word" && row.kind === "modify" && tokens ? (
           tokens.map((token, index) => (
             <span key={index} className={token.kind === 'added' ? 'token-add' : token.kind === 'removed' ? 'token-del' : ''}>
               {token.text}
@@ -369,6 +410,60 @@ function getMarker(side: "old" | "new", kind: DiffRow["kind"], isBlank: boolean)
   if (kind === "delete") return side === "old" ? "-" : " ";
   if (kind === "add") return side === "new" ? "+" : " ";
   return " ";
+}
+
+function buildFilePreview(file: FileDiff, isExpanded: boolean): {
+  hunks: Array<{
+    hunk: HunkDiff;
+    rows: DiffRow[];
+    isPartial: boolean;
+  }>;
+  visibleRows: number;
+  hiddenRows: number;
+  isCollapsed: boolean;
+} {
+  if (isExpanded || file.summary.rows <= FILE_PREVIEW_ROW_LIMIT) {
+    return {
+      hunks: file.hunks.map((hunk) => ({
+        hunk,
+        rows: hunk.rows,
+        isPartial: false,
+      })),
+      visibleRows: file.summary.rows,
+      hiddenRows: 0,
+      isCollapsed: false,
+    };
+  }
+
+  let remaining = FILE_PREVIEW_ROW_LIMIT;
+  const hunks: Array<{
+    hunk: HunkDiff;
+    rows: DiffRow[];
+    isPartial: boolean;
+  }> = [];
+
+  for (const hunk of file.hunks) {
+    if (remaining <= 0) {
+      break;
+    }
+
+    const take = Math.min(remaining, hunk.rows.length);
+    hunks.push({
+      hunk,
+      rows: hunk.rows.slice(0, take),
+      isPartial: take < hunk.rows.length,
+    });
+    remaining -= take;
+  }
+
+  const visibleRows = FILE_PREVIEW_ROW_LIMIT - remaining;
+
+  return {
+    hunks,
+    visibleRows,
+    hiddenRows: Math.max(0, file.summary.rows - visibleRows),
+    isCollapsed: visibleRows < file.summary.rows,
+  };
 }
 
 function useContextDiffParser(source: string): ParseState {
@@ -443,23 +538,6 @@ function shouldUseLargePatchMode(source: string, data: ParsedContextDiff | null,
   if (data.summary.rows > LARGE_PATCH_ROW_THRESHOLD || data.summary.maxHunkRows > LARGE_HUNK_ROW_THRESHOLD * 2) return true;
   if (selectedFile && selectedFile.summary.rows > LARGE_FILE_ROW_THRESHOLD) return true;
   return false;
-}
-
-async function copyText(text: string): Promise<void> {
-  if (navigator.clipboard?.writeText) {
-    try { await navigator.clipboard.writeText(text); return; } catch {}
-  }
-  const textarea = document.createElement("textarea");
-  textarea.value = text;
-  textarea.setAttribute("readonly", "true");
-  textarea.style.position = "fixed";
-  textarea.style.left = "-9999px";
-  textarea.style.top = "0";
-  document.body.appendChild(textarea);
-  textarea.select();
-  const copied = document.execCommand("copy");
-  document.body.removeChild(textarea);
-  if (!copied) throw new Error("Copy failed");
 }
 
 function splitDisplayPath(path: string): { basename: string; extension: string; dir: string } {
