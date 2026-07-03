@@ -303,7 +303,7 @@ function LazyHunkCard({
 
       {isActivated ? (
         <div className="diff-table">
-          <div className="diff-grid">
+          <div className="diff-grid" onCopyCapture={handleGridCopy}>
             <div className="diff-grid-header diff-grid-header--old">Old</div>
             <div className="diff-grid-header diff-grid-header--new">New</div>
             {renderedRows.map((row, rowIndex) => (
@@ -380,6 +380,8 @@ function DiffCell({
   return (
     <div
       className={`diff-line ${lineClass} diff-line--${side}`}
+      data-side={side}
+      data-blank={isBlank ? "true" : "false"}
       style={{
         gridColumn: side === "old" ? "1" : "2",
         gridRow: `${rowIndex}`,
@@ -410,6 +412,103 @@ function getMarker(side: "old" | "new", kind: DiffRow["kind"], isBlank: boolean)
   if (kind === "delete") return side === "old" ? "-" : " ";
   if (kind === "add") return side === "new" ? "+" : " ";
   return " ";
+}
+
+function handleGridCopy(event: React.ClipboardEvent<HTMLDivElement>) {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+    return;
+  }
+
+  const range = selection.getRangeAt(0);
+  const grid = event.currentTarget;
+  const startLine = closestDiffLine(range.startContainer, grid);
+  const endLine = closestDiffLine(range.endContainer, grid);
+
+  if (!startLine || !endLine) {
+    return;
+  }
+
+  const selectedSide = startLine.dataset.side;
+  if (!selectedSide || endLine.dataset.side !== selectedSide) {
+    return;
+  }
+
+  const lines = Array.from(
+    grid.querySelectorAll<HTMLElement>(`.diff-line--${selectedSide}`),
+  );
+  const textLines = lines.flatMap((line) => {
+    if (!range.intersectsNode(line)) {
+      return [];
+    }
+
+    if (line.dataset.blank === "true") {
+      return [];
+    }
+
+    const content = line.querySelector<HTMLElement>(".line-content");
+    if (!content) {
+      return [];
+    }
+
+    const selectedText = extractSelectedTextFromLine(range, line, content);
+    return [selectedText];
+  });
+
+  const hasVisibleText = textLines.some((line) => line.length > 0);
+  if (textLines.length === 0 || !hasVisibleText) {
+    return;
+  }
+
+  event.preventDefault();
+  event.clipboardData.setData("text/plain", textLines.join("\n"));
+}
+
+function closestDiffLine(node: Node, grid: HTMLElement): HTMLElement | null {
+  let current: Node | null = node;
+
+  while (current) {
+    if (
+      current instanceof HTMLElement &&
+      current.classList.contains("diff-line") &&
+      grid.contains(current)
+    ) {
+      return current;
+    }
+
+    current = current.parentNode;
+  }
+
+  return null;
+}
+
+function extractSelectedTextFromLine(
+  sourceRange: Range,
+  line: HTMLElement,
+  content: HTMLElement,
+): string {
+  const startsInLine = line.contains(sourceRange.startContainer);
+  const endsInLine = line.contains(sourceRange.endContainer);
+
+  if (startsInLine && endsInLine) {
+    return sourceRange.toString();
+  }
+
+  const clippedRange = document.createRange();
+
+  if (startsInLine) {
+    clippedRange.setStart(sourceRange.startContainer, sourceRange.startOffset);
+    clippedRange.setEnd(content, content.childNodes.length);
+    return clippedRange.toString();
+  }
+
+  if (endsInLine) {
+    clippedRange.setStart(content, 0);
+    clippedRange.setEnd(sourceRange.endContainer, sourceRange.endOffset);
+    return clippedRange.toString();
+  }
+
+  return content.textContent ?? "";
 }
 
 function buildFilePreview(file: FileDiff, isExpanded: boolean): {

@@ -568,8 +568,9 @@ code {
 
 .line-content {
   padding: 4px 16px;
-  white-space: pre-wrap;
+  white-space: break-spaces;
   word-break: break-all;
+  overflow-wrap: anywhere;
   flex: 1;
   min-width: 0;
   user-select: text;
