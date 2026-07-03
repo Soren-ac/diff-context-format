@@ -273,6 +273,18 @@ code {
   background: var(--bg-surface);
 }
 
+.source-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.source-lead {
+  color: var(--text-secondary);
+  font-size: 0.92rem;
+  font-weight: 500;
+}
+
 .source-textarea {
   flex: 1;
   width: 100%;
@@ -293,21 +305,63 @@ code {
   gap: 12px;
 }
 
+.source-entry-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+  margin: 24px 48px 0;
+  padding: 20px 24px;
+  border: 1px solid rgba(59, 130, 246, 0.18);
+  border-radius: var(--radius-lg);
+  background:
+    linear-gradient(135deg, rgba(239, 246, 255, 0.96), rgba(255, 255, 255, 0.98)),
+    var(--bg-surface);
+  box-shadow: 0 10px 25px rgba(59, 130, 246, 0.08);
+}
+
+.source-entry-banner__content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.source-entry-banner__title {
+  color: var(--text-primary);
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.source-entry-banner__body {
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+  max-width: 680px;
+}
+
 /* Viewer Header */
 .viewer-header {
-  padding: 32px 48px 24px;
+  padding: 18px 48px 16px;
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border-default);
   flex-shrink: 0;
   display: flex;
-  flex-direction: column;
-  gap: 16px;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
   box-shadow: 0 4px 20px rgba(0,0,0,0.02);
   z-index: 2;
 }
 
+.viewer-heading {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .viewer-title {
-  font-size: 1.5rem;
+  font-size: 1.35rem;
   font-weight: 700;
   font-family: var(--font-mono);
   word-break: break-all;
@@ -323,15 +377,15 @@ code {
 
 .viewer-toolbar {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-top: 8px;
+  justify-content: flex-end;
+  flex: none;
 }
 
 .toolbar-group {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 10px;
 }
 
 /* Buttons */
@@ -394,16 +448,16 @@ code {
 .segmented-control {
   display: inline-flex;
   background: var(--bg-surface-hover);
-  padding: 4px;
+  padding: 3px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border-default);
   box-shadow: inset 0 1px 2px rgba(0,0,0,0.02);
 }
 
 .segmented-btn {
-  padding: 8px 20px;
+  padding: 6px 14px;
   border-radius: calc(var(--radius-md) - 2px);
-  font-size: 0.85rem;
+  font-size: 0.82rem;
   font-weight: 600;
   color: var(--text-secondary);
   transition: all 0.2s ease;
@@ -645,6 +699,8 @@ code {
   color: var(--text-secondary);
   gap: 20px;
   background: var(--bg-main);
+  padding: 32px;
+  text-align: center;
 }
 
 .empty-state svg {
@@ -733,13 +789,24 @@ code {
 
   .viewer-header,
   .viewer-toolbar,
+  .source-entry-banner,
   .file-preview-banner {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .source-header,
+  .source-actions {
     flex-direction: column;
     align-items: stretch;
   }
 
   .diff-content {
     padding: 24px;
+  }
+
+  .source-entry-banner {
+    margin: 16px 24px 0;
   }
 
   .file-preview-banner {

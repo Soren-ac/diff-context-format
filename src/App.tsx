@@ -55,6 +55,7 @@ export default function App() {
       ? parsedData.files.find((file) => file.id === selectedFileId) ?? parsedData.files[0]
       : parsedData?.files[0] ?? null;
   const performanceMode = shouldUseLargePatchMode(source, parsedData, selectedFile);
+  const isShowingSample = source === SAMPLE_CONTEXT_DIFF;
   const filePreview = selectedFile
     ? buildFilePreview(selectedFile, expandedFiles[selectedFile.id] === true)
     : null;
@@ -70,8 +71,11 @@ export default function App() {
             <span className={`status-dot ${parseState.isBusy ? 'busy' : 'ready'}`} />
             {parseState.isBusy ? 'Parsing...' : 'Ready'}
           </div>
-          <button className="btn btn-secondary" onClick={() => setShowSource(true)}>
-            Edit Source
+          <button
+            className={`btn ${isShowingSample && !showSource ? 'btn-primary' : 'btn-secondary'}`}
+            onClick={() => setShowSource(true)}
+          >
+            {isShowingSample && !showSource ? 'Paste Your Diff' : 'Edit Source'}
           </button>
         </div>
       </header>
@@ -110,7 +114,10 @@ export default function App() {
           {showSource && (
             <div className="source-panel">
               <div className="source-header">
-                <span className="sidebar-title">Patch Source</span>
+                <div className="source-heading">
+                  <span className="sidebar-title">Patch Source</span>
+                  <div className="source-lead">Paste a context diff here or upload a patch file to replace the sample.</div>
+                </div>
                 <div className="source-actions">
                   <label className="btn btn-secondary" htmlFor={fileInputId}>
                     Upload File
@@ -145,10 +152,25 @@ export default function App() {
             </div>
           )}
 
+          {!showSource && isShowingSample ? (
+            <div className="source-entry-banner">
+              <div className="source-entry-banner__content">
+                <span className="sidebar-title">Sample Mode</span>
+                <div className="source-entry-banner__title">You are currently viewing the bundled sample diff.</div>
+                <div className="source-entry-banner__body">
+                  Open the source panel to paste your own context-format patch or upload a `.diff` / `.patch` file.
+                </div>
+              </div>
+              <button className="btn btn-primary" onClick={() => setShowSource(true)}>
+                Open Input Panel
+              </button>
+            </div>
+          ) : null}
+
           {selectedFile ? (
             <>
               <div className="viewer-header">
-                <div>
+                <div className="viewer-heading">
                   <div className="viewer-title">{selectedFile.displayName}</div>
                   <div className="viewer-subtitle">
                     Select text directly inside one column to copy it. Line numbers and markers are excluded.
