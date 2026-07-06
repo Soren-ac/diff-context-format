@@ -2,8 +2,8 @@ import { startTransition, useEffect, useId, useRef, useState } from "react";
 import {
   formatRange,
   getWordDiffTokens,
+  stripLabelMetadata,
   type DiffRow,
-  type DiffToken,
   type FileDiff,
   type HunkDiff,
   type ParsedContextDiff,
@@ -16,7 +16,6 @@ const LARGE_PATCH_ROW_THRESHOLD = 2_200;
 const LARGE_FILE_ROW_THRESHOLD = 1_200;
 const LARGE_HUNK_ROW_THRESHOLD = 260;
 const LAZY_HUNK_THRESHOLD = 90;
-const HUNK_BATCH_SIZE = 200;
 const FILE_PREVIEW_ROW_LIMIT = 1000;
 
 type ParseState = {
@@ -33,7 +32,7 @@ export default function App() {
   const [source, setSource] = useState(SAMPLE_CONTEXT_DIFF);
   const [viewMode, setViewMode] = useState<ViewMode>("word");
   const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
-  const [showSource, setShowSource] = useState(false);
+  const [showSource, setShowSource] = useState(true);
   const [expandedFiles, setExpandedFiles] = useState<Record<string, boolean>>({});
   const fileInputId = useId();
   const parseState = useContextDiffParser(source);
@@ -56,6 +55,8 @@ export default function App() {
       : parsedData?.files[0] ?? null;
   const performanceMode = shouldUseLargePatchMode(source, parsedData, selectedFile);
   const isShowingSample = source === SAMPLE_CONTEXT_DIFF;
+  const selectedOldPath = selectedFile ? stripLabelMetadata(selectedFile.oldLabel) : "";
+  const selectedNewPath = selectedFile ? stripLabelMetadata(selectedFile.newLabel) : "";
   const filePreview = selectedFile
     ? buildFilePreview(selectedFile, expandedFiles[selectedFile.id] === true)
     : null;
@@ -64,18 +65,25 @@ export default function App() {
     <div className="app-container">
       <header className="topbar">
         <div className="topbar-brand">
-          <span className="topbar-title">Context Diff</span>
+          <svg className="topbar-logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+            <line x1="16" y1="13" x2="8" y2="13"></line>
+            <line x1="16" y1="17" x2="8" y2="17"></line>
+            <polyline points="10 9 9 9 8 9"></polyline>
+          </svg>
+          <span className="topbar-title">Patch Viewer</span>
         </div>
         <div className="topbar-actions">
           <div className="status-indicator">
             <span className={`status-dot ${parseState.isBusy ? 'busy' : 'ready'}`} />
-            {parseState.isBusy ? 'Parsing...' : 'Ready'}
+            <span className="status-text">{parseState.isBusy ? 'Parsing...' : 'Ready'}</span>
           </div>
           <button
             className={`btn ${isShowingSample && !showSource ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setShowSource(true)}
+            onClick={() => setShowSource(!showSource)}
           >
-            {isShowingSample && !showSource ? 'Paste Your Diff' : 'Edit Source'}
+            {showSource ? 'View Diff' : 'Edit Source'}
           </button>
         </div>
       </header>
@@ -83,30 +91,35 @@ export default function App() {
       <div className="main-content">
         <aside className="sidebar">
           <div className="sidebar-header">
-            <span className="sidebar-title">Files</span>
+            <span className="sidebar-title">Changed Files</span>
             {parsedData && (
-              <span className="text-secondary" style={{ fontSize: '0.8rem' }}>
-                {parsedData.summary.files} changed
+              <span className="sidebar-subtitle">
+                {parsedData.summary.files} {parsedData.summary.files === 1 ? 'file' : 'files'}
               </span>
             )}
           </div>
           <div className="file-list">
-            {parsedData?.files.map((file) => (
-              <button
-                key={file.id}
-                className={`file-item ${selectedFile?.id === file.id ? 'active' : ''}`}
-                onClick={() => setSelectedFileId(file.id)}
-                title={file.displayName}
-              >
-                <div className="file-item-name">{splitDisplayPath(file.displayName).basename}</div>
-                <div className="file-item-path">{splitDisplayPath(file.displayName).dir || '/'}</div>
-                <div className="file-item-stats">
-                  <span className="stat-add">+{file.summary.added}</span>
-                  <span className="stat-del">-{file.summary.deleted}</span>
-                  <span className="stat-mod">~{file.summary.modified}</span>
-                </div>
-              </button>
-            ))}
+            {parsedData?.files.map((file) => {
+              const display = splitDisplayPath(file.displayName);
+              return (
+                <button
+                  key={file.id}
+                  className={`file-item ${selectedFile?.id === file.id ? 'active' : ''}`}
+                  onClick={() => setSelectedFileId(file.id)}
+                  title={file.displayName}
+                >
+                  <div className="file-item-header">
+                    <span className="file-item-name">{display.basename}</span>
+                    <div className="file-item-stats">
+                      {file.summary.added > 0 && <span className="stat-add">+{file.summary.added}</span>}
+                      {file.summary.deleted > 0 && <span className="stat-del">-{file.summary.deleted}</span>}
+                      {file.summary.modified > 0 && <span className="stat-mod">~{file.summary.modified}</span>}
+                    </div>
+                  </div>
+                  <div className="file-item-path">{display.dir ? display.dir + '/' : '/'}</div>
+                </button>
+              );
+            })}
           </div>
         </aside>
 
@@ -115,11 +128,12 @@ export default function App() {
             <div className="source-panel">
               <div className="source-header">
                 <div className="source-heading">
-                  <span className="sidebar-title">Patch Source</span>
-                  <div className="source-lead">Paste a context diff here or upload a patch file to replace the sample.</div>
+                  <h2 className="source-title">Patch Source</h2>
+                  <p className="source-lead">Paste a context diff or upload a .patch file.</p>
                 </div>
                 <div className="source-actions">
                   <label className="btn btn-secondary" htmlFor={fileInputId}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
                     Upload File
                   </label>
                   <input
@@ -134,13 +148,17 @@ export default function App() {
                       event.target.value = "";
                     }}
                   />
+                  <div className="action-divider" />
                   <button className="btn btn-ghost" onClick={() => setSource("")}>Clear</button>
                   <button className="btn btn-ghost" onClick={() => setSource(SAMPLE_CONTEXT_DIFF)}>Sample</button>
-                  <button className="btn btn-primary" onClick={() => setShowSource(false)}>Done</button>
+                  <button className="btn btn-primary" onClick={() => setShowSource(false)}>View Diff</button>
                 </div>
               </div>
               {parseState.error && (
-                <div className="error-banner">Parse Error: {parseState.error}</div>
+                <div className="error-banner">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+                  Parse Error: {parseState.error}
+                </div>
               )}
               <textarea
                 className="source-textarea"
@@ -155,99 +173,100 @@ export default function App() {
           {!showSource && isShowingSample ? (
             <div className="source-entry-banner">
               <div className="source-entry-banner__content">
-                <span className="sidebar-title">Sample Mode</span>
-                <div className="source-entry-banner__title">You are currently viewing the bundled sample diff.</div>
+                <span className="source-entry-banner__label">Demo Mode</span>
+                <div className="source-entry-banner__title">Viewing bundled sample diff</div>
                 <div className="source-entry-banner__body">
-                  Open the source panel to paste your own context-format patch or upload a `.diff` / `.patch` file.
+                  Open the source panel to paste your own context-format patch or upload a file.
                 </div>
               </div>
               <button className="btn btn-primary" onClick={() => setShowSource(true)}>
-                Open Input Panel
+                Edit Source
               </button>
             </div>
           ) : null}
 
           {selectedFile ? (
-            <>
+            <div className="viewer-container">
               <div className="viewer-header">
                 <div className="viewer-heading">
-                  <div className="viewer-title">{selectedFile.displayName}</div>
-                  <div className="viewer-subtitle">
-                    Select text directly inside one column to copy it. Line numbers and markers are excluded.
-                  </div>
+                  <h1 className="viewer-title">{selectedFile.displayName}</h1>
+                  <p className="viewer-subtitle">Select text directly inside a column to copy it.</p>
                 </div>
                 <div className="viewer-toolbar">
-                  <div className="toolbar-group">
-                    <div className="segmented-control">
-                      <button
-                        className={`segmented-btn ${viewMode === 'word' ? 'active' : ''}`}
-                        onClick={() => setViewMode('word')}
-                      >
-                        Word
-                      </button>
-                      <button
-                        className={`segmented-btn ${viewMode === 'line' ? 'active' : ''}`}
-                        onClick={() => setViewMode('line')}
-                      >
-                        Line
-                      </button>
-                    </div>
+                  <div className="segmented-control">
+                    <button
+                      className={`segmented-btn ${viewMode === 'word' ? 'active' : ''}`}
+                      onClick={() => setViewMode('word')}
+                    >
+                      Word Diff
+                    </button>
+                    <button
+                      className={`segmented-btn ${viewMode === 'line' ? 'active' : ''}`}
+                      onClick={() => setViewMode('line')}
+                    >
+                      Line Diff
+                    </button>
                   </div>
                 </div>
               </div>
 
-              {filePreview?.isCollapsed ? (
-                <div className="file-preview-banner">
-                  <div>
-                    Previewing the first {filePreview.visibleRows} rows of {selectedFile.summary.rows}.
-                    The remaining {filePreview.hiddenRows} rows are collapsed by default.
-                  </div>
-                  <button
-                    className="btn btn-secondary btn-sm"
-                    onClick={() =>
-                      setExpandedFiles((current) => ({
-                        ...current,
-                        [selectedFile.id]: true,
-                      }))
-                    }
-                  >
-                    Show Remaining Rows
-                  </button>
-                </div>
-              ) : selectedFile.summary.rows > FILE_PREVIEW_ROW_LIMIT ? (
-                <div className="file-preview-banner file-preview-banner--expanded">
-                  <div>Showing all {selectedFile.summary.rows} rows for this file.</div>
-                  <button
-                    className="btn btn-ghost btn-sm"
-                    onClick={() =>
-                      setExpandedFiles((current) => ({
-                        ...current,
-                        [selectedFile.id]: false,
-                      }))
-                    }
-                  >
-                    Collapse to First {FILE_PREVIEW_ROW_LIMIT}
-                  </button>
-                </div>
-              ) : null}
-
               <div className="diff-content">
-                {filePreview?.hunks.map(({ hunk, rows, isPartial }, index) => (
-                  <LazyHunkCard
-                    key={hunk.id}
-                    hunk={hunk}
-                    index={index}
-                    rows={rows}
-                    viewMode={viewMode}
-                    performanceMode={performanceMode}
-                    isPartialPreview={isPartial}
-                  />
-                ))}
+                {filePreview?.isCollapsed ? (
+                  <div className="file-preview-banner">
+                    <div className="file-preview-banner__text">
+                      <strong>Previewing {filePreview.visibleRows} rows</strong> out of {selectedFile.summary.rows}. {filePreview.hiddenRows} rows folded.
+                    </div>
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      onClick={() =>
+                        setExpandedFiles((current) => ({
+                          ...current,
+                          [selectedFile.id]: true,
+                        }))
+                      }
+                    >
+                      Expand All
+                    </button>
+                  </div>
+                ) : selectedFile.summary.rows > FILE_PREVIEW_ROW_LIMIT ? (
+                  <div className="file-preview-banner file-preview-banner--expanded">
+                    <div className="file-preview-banner__text">Showing all {selectedFile.summary.rows} rows.</div>
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      onClick={() =>
+                        setExpandedFiles((current) => ({
+                          ...current,
+                          [selectedFile.id]: false,
+                        }))
+                      }
+                    >
+                      Collapse Large File
+                    </button>
+                  </div>
+                ) : null}
+                
+                <div className="hunks-wrapper">
+                  {filePreview?.hunks.map(({ hunk, rows, isPartial }) => (
+                    <LazyHunkCard
+                      key={hunk.id}
+                      hunk={hunk}
+                      rows={rows}
+                      viewMode={viewMode}
+                      performanceMode={performanceMode}
+                      isPartialPreview={isPartial}
+                      oldPath={selectedOldPath}
+                      newPath={selectedNewPath}
+                    />
+                  ))}
+                </div>
+
                 {filePreview?.isCollapsed ? (
                   <div className="collapsed-tail-panel">
-                    <div className="collapsed-tail-panel__title">Remaining rows are folded away</div>
-                    <div className="collapsed-tail-panel__body">
-                      This file is long, so the viewer starts with a 1000-row preview. Expand to load the rest only when you need it.
+                    <div className="collapsed-tail-panel__content">
+                      <h3 className="collapsed-tail-panel__title">Remaining rows hidden</h3>
+                      <p className="collapsed-tail-panel__body">
+                        Large files are previewed for performance.
+                      </p>
                     </div>
                     <button
                       className="btn btn-primary"
@@ -258,23 +277,26 @@ export default function App() {
                         }))
                       }
                     >
-                      Open Full File
+                      Load Remaining Diff
                     </button>
                   </div>
                 ) : null}
               </div>
-            </>
+            </div>
           ) : (
             <div className="empty-state">
-              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                <polyline points="14 2 14 8 20 8"></polyline>
-                <line x1="16" y1="13" x2="8" y2="13"></line>
-                <line x1="16" y1="17" x2="8" y2="17"></line>
-                <polyline points="10 9 9 9 8 9"></polyline>
-              </svg>
-              <span>No valid diff loaded</span>
-              <button className="btn btn-primary" onClick={() => setShowSource(true)}>Provide Source</button>
+              <div className="empty-state-icon">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                  <polyline points="14 2 14 8 20 8"></polyline>
+                  <line x1="16" y1="13" x2="8" y2="13"></line>
+                  <line x1="16" y1="17" x2="8" y2="17"></line>
+                  <polyline points="10 9 9 9 8 9"></polyline>
+                </svg>
+              </div>
+              <h3 className="empty-state-title">No Valid Patch Loaded</h3>
+              <p className="empty-state-text">Paste a context diff or upload a patch file to begin.</p>
+              <button className="btn btn-primary" onClick={() => setShowSource(true)}>Open Source Panel</button>
             </div>
           )}
         </main>
@@ -285,90 +307,117 @@ export default function App() {
 
 function LazyHunkCard({
   hunk,
-  index,
   rows,
   viewMode,
   performanceMode,
   isPartialPreview,
+  oldPath,
+  newPath,
 }: {
   hunk: HunkDiff;
-  index: number;
   rows: DiffRow[];
   viewMode: ViewMode;
   performanceMode: boolean;
   isPartialPreview: boolean;
+  oldPath: string;
+  newPath: string;
 }) {
   const totalRows = rows.length;
   const useLazyMount = performanceMode && totalRows >= LAZY_HUNK_THRESHOLD;
-  const isLargeHunk = performanceMode && totalRows >= LARGE_HUNK_ROW_THRESHOLD;
   const { sectionRef, isActivated } = useHunkActivation(!useLazyMount);
-  const [visibleRows, setVisibleRows] = useState(
-    isLargeHunk ? Math.min(HUNK_BATCH_SIZE, totalRows) : totalRows,
-  );
+  const [isCollapsed, setIsCollapsed] = useState(false);
+  const renderedRows = rows;
+  const placeholderHeight = `${Math.min(420, 84 + totalRows * 8)}px`;
 
   useEffect(() => {
-    setVisibleRows(isLargeHunk ? Math.min(HUNK_BATCH_SIZE, totalRows) : totalRows);
-  }, [hunk.id, totalRows, isLargeHunk]);
+    setIsCollapsed(false);
+  }, [oldPath, newPath, hunk.oldRange.start, hunk.oldRange.end, hunk.newRange.start, hunk.newRange.end]);
 
-  const renderedRows = isLargeHunk ? rows.slice(0, visibleRows) : rows;
-  const placeholderHeight = `${Math.min(420, 84 + totalRows * 8)}px`;
+  const handleHeaderToggle = () => {
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed && selection.toString().trim().length > 0) {
+      return;
+    }
+    setIsCollapsed((current) => !current);
+  };
 
   return (
     <div ref={sectionRef as any} className="hunk-container" id={hunk.id}>
-      <div className="hunk-header">
-        <span>Hunk {index + 1}</span>
-        <span>
-          {formatRange(hunk.oldRange)} → {formatRange(hunk.newRange)}
-          {isPartialPreview ? " · preview cut here" : ""}
-        </span>
-      </div>
-
       {isActivated ? (
-        <div className="diff-table">
-          <div className="diff-grid" onCopyCapture={handleGridCopy}>
-            <div className="diff-grid-header diff-grid-header--old">Old</div>
-            <div className="diff-grid-header diff-grid-header--new">New</div>
-            {renderedRows.map((row, rowIndex) => (
-              <DiffCell
-                key={`${hunk.id}-old-${rowIndex}`}
-                side="old"
-                row={row}
-                rowIndex={rowIndex + 2}
-                viewMode={viewMode}
-              />
-            ))}
-            {renderedRows.map((row, rowIndex) => (
-              <DiffCell
-                key={`${hunk.id}-new-${rowIndex}`}
-                side="new"
-                row={row}
-                rowIndex={rowIndex + 2}
-                viewMode={viewMode}
-              />
-            ))}
-          </div>
-          {isLargeHunk && visibleRows < totalRows && (
-            <div className="hunk-footer">
-              <span>Showing {visibleRows} of {totalRows} rows</span>
-              <div>
-                <button
-                  className="btn btn-ghost btn-sm"
-                  onClick={() => setVisibleRows((c) => Math.min(c + HUNK_BATCH_SIZE, totalRows))}
-                >
-                  Load More
-                </button>
+        <>
+          <div
+            className={`hunk-sticky-header ${isCollapsed ? "hunk-sticky-header--collapsed" : ""}`}
+            role="button"
+            tabIndex={0}
+            aria-expanded={!isCollapsed}
+            onClick={handleHeaderToggle}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                handleHeaderToggle();
+              }
+            }}
+          >
+            <div className="hunk-header-side hunk-header-side--old">
+              <div className="hunk-header-top">
+                <span className="hunk-header-badge hunk-header-badge--old">Old</span>
+                <span className="hunk-header-range">{formatRange(hunk.oldRange)}</span>
               </div>
+              <div className="hunk-header-path" title={oldPath}>{oldPath}</div>
             </div>
-          )}
-          {isPartialPreview ? (
-            <div className="hunk-footer hunk-footer--preview-cut">
-              <span>This hunk continues below the current 1000-row preview.</span>
+
+            <div className="hunk-header-side hunk-header-side--new">
+              <div className="hunk-header-top">
+                <div className="hunk-header-top-group">
+                  <span className="hunk-header-badge hunk-header-badge--new">New</span>
+                  <span className="hunk-header-range">{formatRange(hunk.newRange)}</span>
+                </div>
+                <span className="hunk-header-toggle" aria-hidden="true">
+                  {isCollapsed ? (
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                  ) : (
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"></polyline></svg>
+                  )}
+                </span>
+              </div>
+              <div className="hunk-header-path" title={newPath}>{newPath}</div>
+            </div>
+          </div>
+          {!isCollapsed ? (
+            <div className="diff-table">
+              <div className="diff-grid" onCopyCapture={handleGridCopy}>
+                {renderedRows.map((row, rowIndex) => (
+                  <DiffCell
+                    key={`${hunk.id}-old-${rowIndex}`}
+                    side="old"
+                    row={row}
+                    rowIndex={rowIndex + 1}
+                    viewMode={viewMode}
+                  />
+                ))}
+                {renderedRows.map((row, rowIndex) => (
+                  <DiffCell
+                    key={`${hunk.id}-new-${rowIndex}`}
+                    side="new"
+                    row={row}
+                    rowIndex={rowIndex + 1}
+                    viewMode={viewMode}
+                  />
+                ))}
+              </div>
+              {isPartialPreview ? (
+                <div className="hunk-footer hunk-footer--preview-cut">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+                  <span>This hunk continues below the 1000-row preview limit.</span>
+                </div>
+              ) : null}
             </div>
           ) : null}
-        </div>
+        </>
       ) : (
         <div className="lazy-hunk-placeholder" style={{ minHeight: placeholderHeight }}>
-          Loading hunk...
+          <div className="loading-spinner"></div>
+          Loading hunk content...
         </div>
       )}
     </div>

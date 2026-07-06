@@ -203,6 +203,10 @@ export function formatRange(range: RangeInfo): string {
   return `${range.start},${range.end}`;
 }
 
+export function stripLabelMetadata(label: string): string {
+  return label.split("\t")[0]?.trim() ?? label.trim();
+}
+
 function findNewRangeLine(lines: string[], startIndex: number): number {
   for (let index = startIndex; index < lines.length; index += 1) {
     if (NEW_RANGE_RE.test(lines[index])) {
@@ -574,8 +578,8 @@ function summarizeAll(files: FileDiff[]): DiffSummary {
 }
 
 function deriveDisplayName(oldLabel: string, newLabel: string): string {
-  const oldName = stripMetadata(oldLabel);
-  const newName = stripMetadata(newLabel);
+  const oldName = stripLabelMetadata(oldLabel);
+  const newName = stripLabelMetadata(newLabel);
 
   if (newName && newName !== "/dev/null") {
     return newName;
@@ -586,8 +590,4 @@ function deriveDisplayName(oldLabel: string, newLabel: string): string {
   }
 
   return newLabel || oldLabel || "Unnamed file";
-}
-
-function stripMetadata(label: string): string {
-  return label.split("\t")[0]?.trim() ?? label.trim();
 }
