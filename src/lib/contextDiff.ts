@@ -124,13 +124,13 @@ export function parseContextDiff(input: string): ParsedContextDiff {
       const oldSection = lines.slice(index + 2, newRangeLineIndex);
       const newSectionEnd = findNextBoundary(lines, newRangeLineIndex + 1);
       const newSection = lines.slice(newRangeLineIndex + 1, newSectionEnd);
-      const rows = alignSections(oldSection, newSection, oldRange.start, newRange.start);
+      const aligned = alignSections(oldSection, newSection, oldRange, newRange);
 
       hunks.push({
         id: `file-${fileCounter}-hunk-${hunkCounter}`,
-        oldRange,
-        newRange,
-        rows,
+        oldRange: aligned.oldRange,
+        newRange: aligned.newRange,
+        rows: aligned.rows,
       });
 
       hunkCounter += 1;
@@ -257,11 +257,30 @@ function parseRange(line: string, matcher: RegExp): RangeInfo {
 function alignSections(
   oldSection: string[],
   newSection: string[],
-  oldStart: number,
-  newStart: number,
-): DiffRow[] {
-  const oldLines = buildLogicalSection(oldSection, oldStart, "old");
-  const newLines = buildLogicalSection(newSection, newStart, "new");
+  oldRange: RangeInfo,
+  newRange: RangeInfo,
+) {
+  let normalizedOldRange = oldRange;
+  let normalizedNewRange = newRange;
+  let oldLines = buildLogicalSection(oldSection, oldRange.start, "old");
+  let newLines = buildLogicalSection(newSection, newRange.start, "new");
+
+  const recovered = recoverOmittedContextSections(
+    oldSection,
+    newSection,
+    oldRange,
+    newRange,
+    oldLines,
+    newLines,
+  );
+
+  if (recovered) {
+    normalizedOldRange = recovered.oldRange;
+    normalizedNewRange = recovered.newRange;
+    oldLines = recovered.oldLines;
+    newLines = recovered.newLines;
+  }
+
   const operations = diffLineSequences(oldLines, newLines);
   const rows: DiffRow[] = [];
   let index = 0;
@@ -332,7 +351,98 @@ function alignSections(
     }
   }
 
-  return rows;
+  return {
+    oldRange: normalizedOldRange,
+    newRange: normalizedNewRange,
+    rows,
+  };
+}
+
+function recoverOmittedContextSections(
+  oldSection: string[],
+  newSection: string[],
+  oldRange: RangeInfo,
+  newRange: RangeInfo,
+  oldLines: SectionLine[],
+  newLines: SectionLine[],
+): {
+  oldRange: RangeInfo;
+  newRange: RangeInfo;
+  oldLines: SectionLine[];
+  newLines: SectionLine[];
+} | null {
+  if (newLines.length === 0) {
+    const recoveredNewLines = buildContextOnlyCompanionSection(oldSection, newRange.start, "old");
+    if (recoveredNewLines) {
+      return {
+        oldRange,
+        newRange: buildRangeFromStart(newRange.start, recoveredNewLines.length),
+        oldLines,
+        newLines: recoveredNewLines,
+      };
+    }
+  }
+
+  if (oldLines.length === 0) {
+    const recoveredOldLines = buildContextOnlyCompanionSection(newSection, oldRange.start, "new");
+    if (recoveredOldLines) {
+      return {
+        oldRange: buildRangeFromStart(oldRange.start, recoveredOldLines.length),
+        newRange,
+        oldLines: recoveredOldLines,
+        newLines,
+      };
+    }
+  }
+
+  return null;
+}
+
+function buildContextOnlyCompanionSection(
+  section: string[],
+  startLine: number,
+  sourceSide: "old" | "new",
+): SectionLine[] | null {
+  const allowedChangeMarker = sourceSide === "old" ? "-" : "+";
+  const lines: SectionLine[] = [];
+  let lineNumber = startLine;
+
+  for (const rawLine of section) {
+    if (!rawLine.length || rawLine.startsWith("\\ ")) {
+      continue;
+    }
+
+    const marker = rawLine[0];
+    const text = rawLine.length > 1 && rawLine[1] === " " ? rawLine.slice(2) : rawLine.slice(1);
+
+    if (marker === " ") {
+      lines.push({
+        text,
+        lineNumber: lineNumber > 0 ? lineNumber : null,
+      });
+      lineNumber += 1;
+      continue;
+    }
+
+    if (marker === allowedChangeMarker) {
+      continue;
+    }
+
+    return null;
+  }
+
+  return lines;
+}
+
+function buildRangeFromStart(start: number, lineCount: number): RangeInfo {
+  if (lineCount <= 0) {
+    return { start: 0, end: 0 };
+  }
+
+  return {
+    start,
+    end: start + lineCount - 1,
+  };
 }
 
 function buildLogicalSection(
